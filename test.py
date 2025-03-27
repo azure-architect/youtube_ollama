@@ -5,9 +5,9 @@ import logging
 import argparse
 import os
 from dotenv import load_dotenv
-from src.agents.youtube_transcript_agent import YouTubeTranscriptAgent
-from src.api_services.transcript_service import get_video_id_from_url
-from src.api_services.youtube_data_api import get_youtube_video_data
+from agents.youtube_transcript_agent import YouTubeTranscriptAgent  # Changed from src.agents
+from api_services.transcript_service import get_video_id_from_url    # Changed from src.api_services
+from api_services.youtube_data_api import get_youtube_video_data     # Changed from src.api_services
 
 # Load environment variables
 load_dotenv()
@@ -57,7 +57,7 @@ async def test_agent(video_url: str, model_name: str = "llama3.1:8b-instruct-q8_
             os.makedirs("output", exist_ok=True)
             
             with open(output_file, "w") as f:
-                json.dump(video_data.dict(), f, indent=2)
+                json.dump(video_data.model_dump(), f, indent=2)  # Changed from dict() to model_dump()
             
             logger.info(f"Output saved to {output_file}")
             

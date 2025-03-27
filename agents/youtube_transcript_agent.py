@@ -1,15 +1,15 @@
-# src/agents/youtube_transcript_agent.py
+# agents/youtube_transcript_agent.py
 import json
 import re
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 import isodate
 
-# Relative imports for project structure
-from ..agents.base_agent import BaseAgent
-from ..models.data_models import YouTubeVideoData, TranscriptSegment
-from ..api_services.transcript_service import get_youtube_tranget_video_transcript_data, get_video_id_from_url
-from ..api_services.youtube_data_api import get_youtube_video_data
+# Use absolute imports from the project root
+from agents.base_agent import BaseAgent
+from models.data_models import YouTubeVideoData, TranscriptSegment
+from api_services.transcript_service import get_video_transcript_data, get_video_id_from_url
+from api_services.youtube_data_api import get_youtube_video_data
 
 class YouTubeTranscriptAgent(BaseAgent[YouTubeVideoData]):
     """Agent for extracting and processing YouTube transcript data."""
@@ -88,30 +88,50 @@ class YouTubeTranscriptAgent(BaseAgent[YouTubeVideoData]):
         """
         try:
             # Get video metadata from YouTube Data API
-            video_data = await get_youtube_video_data(video_id, self.youtube_api_key)
+            video_data = get_youtube_video_data(video_id)
             
-            # Get transcript data
-            transcript_data = await get_youtube_transcript(video_id)
+            # Get transcript data using the transcript service
+            transcript_url = f"https://www.youtube.com/watch?v={video_id}"
+            transcript_result = get_video_transcript_data(transcript_url)
             
-            # Process transcript data
-            transcript_segments = await self._process_transcript(transcript_data)
+            transcript_segments = []
+            if transcript_result and 'transcript' in transcript_result:
+                # Process transcript data
+                transcript_segments = await self._process_transcript(transcript_result['transcript'])
             
-            # Create YouTubeVideoData object
-            result = YouTubeVideoData(
-                video_id=video_id,
-                title=video_data.get('title', 'Error retrieving data'),
-                description=video_data.get('description', 'An error occurred while retrieving video data'),
-                channel=video_data.get('channel', 'Unknown'),
-                channel_id=video_data.get('channel_id', 'Unknown'),
-                published_at=video_data.get('published_at', 'Unknown'),
-                transcript=transcript_segments,
-                thumbnail_url=video_data.get('thumbnail_url'),
-                view_count=video_data.get('view_count', 0),
-                like_count=video_data.get('like_count'),
-                comment_count=video_data.get('comment_count'),
-                tags=video_data.get('tags', []),
-                duration=self._parse_duration(video_data.get('duration', 'PT0S'))
-            )
+            # Extract video information from nested structure
+            if video_data and 'video' in video_data and 'channel' in video_data:
+                video_info = video_data['video']
+                channel_info = video_data['channel']
+                
+                # Create YouTubeVideoData object
+                result = YouTubeVideoData(
+                    video_id=video_id,
+                    title=video_info.get('title', 'Error retrieving data'),
+                    description=video_info.get('description', 'An error occurred while retrieving video data'),
+                    channel=channel_info.get('title', 'Unknown'),
+                    channel_id=channel_info.get('id', 'Unknown'),
+                    published_at=video_info.get('publishedAt', 'Unknown'),
+                    transcript=transcript_segments,
+                    thumbnail_url=video_info.get('thumbnail'),
+                    view_count=video_info.get('views', 0),
+                    like_count=video_info.get('likes'),
+                    comment_count=video_info.get('comments', {}).get('commentCount'),
+                    tags=video_info.get('tags', []),
+                    duration=self._parse_duration(video_info.get('duration', 'PT0S'))
+                )
+            else:
+                # Create a minimal valid result for flat structure
+                result = YouTubeVideoData(
+                    video_id=video_id,
+                    title="Error retrieving data",
+                    description="An error occurred while retrieving video data",
+                    channel="Unknown",
+                    channel_id="Unknown",
+                    published_at="Unknown",
+                    transcript=transcript_segments,
+                    duration=0
+                )
             
             # Store the result for fallback parsing if needed
             self.input_data = result
