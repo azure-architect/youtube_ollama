@@ -16,7 +16,7 @@ class YouTubeTranscriptAgent(BaseAgent[YouTubeVideoData]):
     
     def __init__(self, 
                  youtube_api_key: str,
-                 model_name: str = "llama3.1:8b-instruct-q8_0",
+                 model_name: str = "mistral:latest",
                  base_url: str = "http://localhost:11434",
                  temperature: float = 0.7):
         """

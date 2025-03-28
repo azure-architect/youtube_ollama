@@ -1,82 +1,93 @@
-#!/usr/bin/env python
 import asyncio
+import httpx
 import json
 import logging
-import argparse
-import os
-from dotenv import load_dotenv
-from agents.youtube_transcript_agent import YouTubeTranscriptAgent  # Changed from src.agents
-from api_services.transcript_service import get_video_id_from_url    # Changed from src.api_services
-# from api_services.youtube_data_api import get_youtube_video_data     # Changed from src.api_services
+import sys
 
-# Load environment variables
-load_dotenv()
-YT_DATA_API_KEY = os.getenv('YT_DATA_API_KEY')
-if not YT_DATA_API_KEY:
-    print("Warning: YT_DATA_API_KEY not found in .env file")
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s: %(message)s'
-)
+# Set up logging to match your application
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
-async def test_agent(video_url: str, model_name: str = "llama3.1:8b-instruct-q8_0", save_output: bool = True):
-    """Test the YouTube transcript agent with a given video URL."""
+async def test_ollama_as_agent():
+    """Test Ollama API access exactly as the agent would access it"""
+    
+    # Use the same model and URL as your agent
+    model_name = "mistral:latest"  # Same default as your agent
+    base_url = "http://localhost:11434"
+    temperature = 0.1
+    num_ctx = 4096
+    
+    # Short sample prompt
+    prompt = """
+    You are an expert analyzer of video content. Extract key insights from this transcript.
+    
+    TRANSCRIPT:
+    This is a short test transcript about simple websites that make money.
+    
+    Please provide a JSON response with:
+    1. A summary
+    2. Key points
+    
+    Format as valid JSON.
+    """
+    
     try:
-        # Extract video ID from URL
-        video_id = get_video_id_from_url(video_url)
-        if not video_id:
-            logger.error(f"Could not extract video ID from URL: {video_url}")
-            return
+        # Use the exact same code as your agent's _get_model_response method
+        url = f"{base_url}/api/generate"
         
-        logger.info(f"Processing video ID: {video_id} with model: {model_name}")
+        payload = {
+            "model": model_name,
+            "prompt": prompt,
+            "stream": False,
+            "temperature": temperature,
+            "num_ctx": num_ctx
+        }
         
-        # Create the agent with the YouTube API key
-        agent = YouTubeTranscriptAgent(youtube_api_key=YT_DATA_API_KEY, model_name=model_name)
+        logger.info(f"Sending request to {url}")
+        logger.info(f"Using model: {model_name}")
+        logger.info(f"Payload: {json.dumps(payload)[:200]}...")
         
-        # Run the agent
-        logger.info("Running YouTube transcript agent...")
-        start_time = asyncio.get_event_loop().time()
-        video_data = await agent.run(video_id)
-        end_time = asyncio.get_event_loop().time()
-        
-        # Log processing time
-        processing_time = end_time - start_time
-        logger.info(f"Agent processing completed in {processing_time:.2f} seconds")
-        
-        # Display summary info
-        logger.info(f"Video Title: {video_data.title}")
-        logger.info(f"Channel: {video_data.channel}")
-        logger.info(f"Transcript segments: {len(video_data.transcript)}")
-        
-        if save_output:
-            # Save the result to a file
-            output_file = f"output/{video_id}_transcript_data.json"
-            os.makedirs("output", exist_ok=True)
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, json=payload, timeout=60.0)
+            logger.info(f"Status code: {response.status_code}")
             
-            with open(output_file, "w") as f:
-                json.dump(video_data.model_dump(), f, indent=2)  # Changed from dict() to model_dump()
-            
-            logger.info(f"Output saved to {output_file}")
-            
-        return video_data
-            
+            if response.status_code == 200:
+                result = response.json()
+                logger.info(f"SUCCESS! Response: {json.dumps(result)[:200]}...")
+                return result.get("response", "")
+            else:
+                logger.error(f"Failed with status {response.status_code}")
+                logger.error(f"Response: {response.text}")
+                return f"Error: {response.status_code}"
+                
     except Exception as e:
-        logger.error(f"Error testing agent: {e}")
-        raise
+        logger.error(f"Error getting model response: {type(e).__name__}: {e}")
+        return f"Error: {str(e)}"
+    
+    # Also check available models
+    try:
+        logger.info("\nVerifying available models...")
+        models_url = f"{base_url}/api/tags"
+        
+        async with httpx.AsyncClient() as client:
+            models_response = await client.get(models_url)
+            
+            if models_response.status_code == 200:
+                models = models_response.json()
+                model_names = [m['name'] for m in models.get('models', [])]
+                logger.info(f"Available models: {model_names}")
+                
+                if model_name in model_names:
+                    logger.info(f"✓ Model '{model_name}' is available")
+                else:
+                    logger.warning(f"✗ Model '{model_name}' is NOT in the available models list")
+                    logger.info("Available models are: " + ", ".join(model_names))
+            else:
+                logger.error(f"Failed to list models: {models_response.status_code}")
+    except Exception as e:
+        logger.error(f"Error listing models: {type(e).__name__}: {e}")
 
 if __name__ == "__main__":
-    # Set up argument parser
-    parser = argparse.ArgumentParser(description='Test YouTube Transcript Agent')
-    parser.add_argument('url', help='YouTube video URL')
-    parser.add_argument('--model', '-m', default="llama3.1:8b-instruct-q8_0", help='Ollama model name')
-    parser.add_argument('--no-save', '-n', action='store_true', help="Don't save output to file")
-    args = parser.parse_args()
-    
-    # Make sure the output directory exists
-    os.makedirs("output", exist_ok=True)
-    
-    # Run the agent test
-    asyncio.run(test_agent(args.url, args.model, not args.no_save))
+    result = asyncio.run(test_ollama_as_agent())
+    print("\nFinal result from test:")
+    print(result)

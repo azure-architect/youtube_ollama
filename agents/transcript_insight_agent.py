@@ -1,5 +1,6 @@
 # agents/transcript_insights_agent.py
 import logging
+import httpx
 import json
 import os
 import re
@@ -13,7 +14,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(m
 logger = logging.getLogger(__name__)
 
 # Default model configuration
-DEFAULT_INSIGHTS_MODEL = "llama3.1:8b-instruct-q8_0"
+DEFAULT_INSIGHTS_MODEL = "mistral:latest"
 
 class TranscriptInsightsAgent(BaseAgent[VideoAnalysisData]):
     """Agent for extracting insights from YouTube video transcripts."""
@@ -69,6 +70,30 @@ class TranscriptInsightsAgent(BaseAgent[VideoAnalysisData]):
         ```
         """
         return prompt
+    
+    async def _get_model_response(self, prompt: str) -> str:
+        """Send a prompt to the Ollama model and get a response."""
+        try:
+            # Use the /api/generate endpoint that was confirmed to work
+            url = f"{self.base_url}/api/generate"
+            
+            payload = {
+                "model": self.model_name,
+                "prompt": prompt,
+                "stream": False,  # Get the full response at once
+                "temperature": self.temperature,
+                "num_ctx": self.num_ctx
+            }
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.post(url, json=payload, timeout=60.0)
+                response.raise_for_status()
+                result = response.json()
+                return result.get("response", "")
+                
+        except Exception as e:
+            logger.error(f"Error getting model response: {e}")
+            return f"Error: {str(e)}"
     
     async def run(self, video_data: YouTubeVideoData) -> VideoAnalysisData:
         """Run the agent to extract insights from video transcript."""
