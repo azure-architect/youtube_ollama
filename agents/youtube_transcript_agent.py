@@ -99,29 +99,41 @@ class YouTubeTranscriptAgent(BaseAgent[YouTubeVideoData]):
                 # Process transcript data
                 transcript_segments = await self._process_transcript(transcript_result['transcript'])
             
-            # Extract video information from nested structure
-            if video_data and 'video' in video_data and 'channel' in video_data:
-                video_info = video_data['video']
-                channel_info = video_data['channel']
+            # Extract video information from the API response
+            if video_data and isinstance(video_data, dict):
+                # Store all raw data from the API
+                raw_snippet = video_data.get('snippet', {})
+                raw_statistics = video_data.get('statistics', {})
+                raw_status = video_data.get('status', {})
+                raw_topic_details = video_data.get('topicDetails', {})
+                raw_content_details = video_data.get('contentDetails', {})
                 
-                # Create YouTubeVideoData object
+                # Create YouTubeVideoData object with all available data
                 result = YouTubeVideoData(
                     video_id=video_id,
-                    title=video_info.get('title', 'Error retrieving data'),
-                    description=video_info.get('description', 'An error occurred while retrieving video data'),
-                    channel=channel_info.get('title', 'Unknown'),
-                    channel_id=channel_info.get('id', 'Unknown'),
-                    published_at=video_info.get('publishedAt', 'Unknown'),
+                    title=raw_snippet.get('title', 'No title'),
+                    description=raw_snippet.get('description', 'No description'),
+                    channel=raw_snippet.get('channelTitle', 'Unknown'),
+                    channel_id=raw_snippet.get('channelId', 'Unknown'),
+                    published_at=raw_snippet.get('publishedAt', ''),
                     transcript=transcript_segments,
-                    thumbnail_url=video_info.get('thumbnail'),
-                    view_count=video_info.get('views', 0),
-                    like_count=video_info.get('likes'),
-                    comment_count=video_info.get('comments', {}).get('commentCount'),
-                    tags=video_info.get('tags', []),
-                    duration=self._parse_duration(video_info.get('duration', 'PT0S'))
+                    thumbnail_url=raw_snippet.get('thumbnails', {}).get('high', {}).get('url'),
+                    view_count=int(raw_statistics.get('viewCount', 0)) if raw_statistics.get('viewCount') else None,
+                    like_count=int(raw_statistics.get('likeCount', 0)) if raw_statistics.get('likeCount') else None,
+                    comment_count=int(raw_statistics.get('commentCount', 0)) if raw_statistics.get('commentCount') else None,
+                    tags=raw_snippet.get('tags', []),
+                    duration=self._parse_duration(raw_content_details.get('duration', 'PT0S')),
+                    # Store all raw data
+                    raw_data={
+                        'snippet': raw_snippet,
+                        'statistics': raw_statistics,
+                        'status': raw_status,
+                        'topicDetails': raw_topic_details,
+                        'contentDetails': raw_content_details
+                    }
                 )
             else:
-                # Create a minimal valid result for flat structure
+                # Create a minimal valid result if no data is available
                 result = YouTubeVideoData(
                     video_id=video_id,
                     title="Error retrieving data",
@@ -130,7 +142,8 @@ class YouTubeTranscriptAgent(BaseAgent[YouTubeVideoData]):
                     channel_id="Unknown",
                     published_at="Unknown",
                     transcript=transcript_segments,
-                    duration=0
+                    duration=0,
+                    raw_data={}
                 )
             
             # Store the result for fallback parsing if needed
@@ -139,7 +152,9 @@ class YouTubeTranscriptAgent(BaseAgent[YouTubeVideoData]):
             return result
             
         except Exception as e:
+            import traceback
             print(f"Error processing video data: {e}")
+            print(traceback.format_exc())  # Print full traceback for debugging
             
             # Create a minimal valid result
             result = YouTubeVideoData(
@@ -150,14 +165,15 @@ class YouTubeTranscriptAgent(BaseAgent[YouTubeVideoData]):
                 channel_id="Unknown",
                 published_at="Unknown",
                 transcript=[],
-                duration=0
+                duration=0,
+                raw_data={}
             )
             
             # Store the result for fallback parsing
             self.input_data = result
             
             return result
-            
+    
     def _parse_duration(self, duration_str: str) -> int:
         """
         Parse ISO 8601 duration string to seconds.
@@ -201,5 +217,6 @@ class YouTubeTranscriptAgent(BaseAgent[YouTubeVideoData]):
             channel_id="Unknown",
             published_at="Unknown",
             transcript=[],
-            duration=0
+            duration=0,
+            raw_data={}
         )

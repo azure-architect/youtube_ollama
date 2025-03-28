@@ -1,74 +1,143 @@
+#!/usr/bin/env python
 import asyncio
+import argparse
+import logging
 import os
 import json
+import sys
+from typing import List, Optional
 from dotenv import load_dotenv
-from src.graph.workflow import create_workflow, generate_workflow_diagram
-from src.graph.state import WorkflowState
-from src.graph.nodes import StartResearch
-from src.utils.helpers import ensure_ollama_model
 
-# Load environment variables
-load_dotenv()
+# Import our agent and utilities
+from agents.youtube_transcript_agent import YouTubeTranscriptAgent
+from api_services.transcript_service import get_video_id_from_url
 
-# Define the model to use
-OLLAMA_MODEL = "llama3-groq-tool-use:latest"  # Change to any model you have or want to pull
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s: %(message)s'
+)
+logger = logging.getLogger(__name__)
 
-async def main():
-    # Ensure Ollama is running and the model is available
-    if not ensure_ollama_model(OLLAMA_MODEL):
-        print(f"Error: Could not ensure Ollama model {OLLAMA_MODEL} is available")
+# Ensure output directory exists
+os.makedirs("output", exist_ok=True)
+
+# Default model configuration - can be changed here
+DEFAULT_MODEL = "llama3.1:8b-instruct-q8_0"
+
+async def process_video(video_url: str, model_name: str = None, save_output: bool = False) -> None:
+    """
+    Process a single YouTube video URL
+    
+    Args:
+        video_url: URL of the YouTube video
+        model_name: Name of the Ollama model to use (if None, uses agent default)
+        save_output: Whether to save output to a file
+    """
+    # Extract video ID from URL
+    video_id = get_video_id_from_url(video_url)
+    if not video_id:
+        logger.error(f"Could not extract video ID from URL: {video_url}")
         return
     
-    # Create the workflow graph
-    workflow = create_workflow()
+    # Use the default model if none specified
+    model_to_use = model_name or DEFAULT_MODEL
+    logger.info(f"Processing video ID: {video_id} with model: {model_to_use}")
     
-    # Generate a diagram of the workflow
-    generate_workflow_diagram()
+    # Load API key
+    api_key = os.getenv('YT_DATA_API_KEY')
+    if not api_key:
+        logger.error("YouTube API key not found in environment variables")
+        return
     
-    # Get user query or use default
-    query = input("Enter a research topic (or press Enter for default): ")
-    if not query:
-        query = "What are the latest developments in quantum computing?"
+    # Create the agent with the YouTube API key
+    agent = YouTubeTranscriptAgent(youtube_api_key=api_key, model_name=model_to_use)
     
-    # Initialize the workflow state
-    state = WorkflowState(query=query)
+    try:
+        # Run the agent
+        logger.info("Running YouTube transcript agent...")
+        start_time = asyncio.get_event_loop().time()
+        video_data = await agent.run(video_id)
+        end_time = asyncio.get_event_loop().time()
+        
+        # Log processing time
+        processing_time = end_time - start_time
+        logger.info(f"Agent processing completed in {processing_time:.2f} seconds")
+        
+        # Display summary info
+        logger.info(f"Video Title: {video_data.title}")
+        logger.info(f"Channel: {video_data.channel}")
+        logger.info(f"Transcript segments: {len(video_data.transcript)}")
+        
+        if save_output:
+            # Save the result to a file
+            output_file = f"output/{video_id}_transcript_data.json"
+            
+            with open(output_file, "w", encoding="utf-8") as f:
+                json.dump(video_data.model_dump(), f, indent=2, ensure_ascii=False)
+            
+            logger.info(f"Output saved to {output_file}")
+            
+        return video_data
     
-    # Run the workflow
-    print(f"\nStarting research workflow for query: {query}")
-    print("=" * 50)
-    print(f"Using Ollama model: {OLLAMA_MODEL}")
+    except Exception as e:
+        logger.error(f"Error processing video: {e}", exc_info=True)
+        return None
+        
+async def process_batch(urls_file: str, model_name: str = None, save_output: bool = False) -> None:
+    """
+    Process a batch of YouTube video URLs from a file
     
-    result = await workflow.run(StartResearch(), state=state)
+    Args:
+        urls_file: Path to file containing URLs (one per line)
+        model_name: Name of the Ollama model to use (if None, uses agent default)
+        save_output: Whether to save output to files
+    """
+    try:
+        with open(urls_file, 'r') as f:
+            urls = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+        
+        logger.info(f"Processing {len(urls)} videos from {urls_file}")
+        
+        results = []
+        for i, url in enumerate(urls):
+            logger.info(f"Processing video {i+1}/{len(urls)}: {url}")
+            result = await process_video(url, model_name, save_output)
+            if result:
+                results.append(result)
+            
+        return results
+            
+    except Exception as e:
+        logger.error(f"Error processing batch file: {e}")
+        return []
+
+def main():
+    # Load environment variables
+    load_dotenv()
     
-    # Print the results
-    print("\n" + "=" * 50)
-    print("RESEARCH AND ANALYSIS RESULTS")
-    print("=" * 50)
+    # Set up argument parser
+    parser = argparse.ArgumentParser(description='YouTube Transcript Analysis Tool')
     
-    print(f"\nQUERY: {result.output['query']}")
+    # Add arguments - first argument is either a URL or a file path
+    parser.add_argument('input', help='YouTube video URL or path to file with URLs (one per line)')
+    parser.add_argument('-b', '--batch', action='store_true', help='Process input as a batch file')
+    parser.add_argument('-m', '--model', help=f'Override default Ollama model (default: {DEFAULT_MODEL})')
+    parser.add_argument('-s', '--save', action='store_true', help="Save output to file")
     
-    # Research section
-    print("\nRESEARCH SUMMARY:")
-    print(f"Topic: {result.output['research']['topic']}")
-    print("\nKey Points:")
-    for i, point in enumerate(result.output['research']['key_points'], 1):
-        print(f"{i}. {point}")
-    print(f"\nConclusion: {result.output['research']['conclusion']}")
+    args = parser.parse_args()
     
-    # Analysis section
-    print("\nANALYSIS:")
-    print("\nKey Insights:")
-    for i, insight in enumerate(result.output['analysis']['key_insights'], 1):
-        print(f"{i}. {insight}")
-    print("\nRecommendations:")
-    for i, rec in enumerate(result.output['analysis']['recommendations'], 1):
-        print(f"{i}. {rec}")
-    print(f"\nConfidence Score: {result.output['analysis']['confidence_score']}")
+    # Check if API key is available
+    if not os.getenv('YT_DATA_API_KEY'):
+        logger.error("YouTube API key not found. Please set YT_DATA_API_KEY environment variable")
+        sys.exit(1)
     
-    # Save results to file
-    with open("research_results.json", "w") as f:
-        json.dump(result.output, f, indent=2)
-    print("\nResults saved to research_results.json")
+    # Run the appropriate process
+    if args.batch:
+        asyncio.run(process_batch(args.input, args.model, args.save))
+    else:
+        # Assume it's a URL
+        asyncio.run(process_video(args.input, args.model, args.save))
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
