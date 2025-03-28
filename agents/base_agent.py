@@ -10,7 +10,7 @@ class BaseAgent(Generic[T]):
     """Base agent class that handles common functionality for Ollama API interactions."""
     
     def __init__(self, 
-                 model_name: str = "lllama3-groq-tool-use:latest",
+                 model_name: str = "mistral:latest",
                  base_url: str = "http://localhost:11434",
                  temperature: float = 0.7,
                  num_ctx: int = 4096,

@@ -4,7 +4,7 @@ import json
 import os
 from typing import Dict, Any, Optional
 
-from agents.transcript_insight_agent import TranscriptInsightsAgent
+from agents.transcript_insight_agent import TranscriptInsightAgent
 from models.data_models import YouTubeVideoData, VideoAnalysisData
 
 logger = logging.getLogger(__name__)
@@ -14,7 +14,7 @@ class TranscriptAnalysisNode:
     
     def __init__(self, model_name: Optional[str] = None, save_output: bool = True):
         """Initialize the transcript analysis node."""
-        self.agent = TranscriptInsightsAgent(model_name=model_name)
+        self.agent = TranscriptInsightAgent(model_name=model_name)
         self.save_output = save_output
     
     async def process(self, state: Dict[str, Any]) -> Dict[str, Any]:

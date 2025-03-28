@@ -2,117 +2,98 @@
 import logging
 import httpx
 import json
-import os
 import re
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any
 
-from agents.base_agent import BaseAgent
 from models.data_models import YouTubeVideoData, VideoAnalysisData, SoftwareMention
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
-# Default model configuration
-DEFAULT_INSIGHTS_MODEL = "mistral:latest"
-
-class TranscriptInsightsAgent(BaseAgent[VideoAnalysisData]):
-    """Agent for extracting insights from YouTube video transcripts."""
+class TranscriptInsightAgent:
+    """MVP Agent for extracting insights from YouTube video transcripts."""
     
     def __init__(self, 
-                 model_name: str = DEFAULT_INSIGHTS_MODEL,
-                 base_url: str = "http://localhost:11434",
-                 temperature: float = 0.1):
-        """Initialize the Transcript Insights agent."""
-        super().__init__(
-            model_name=model_name,
-            base_url=base_url,
-            temperature=temperature,
-            num_ctx=4096,
-            result_model=VideoAnalysisData
-        )
-        self.input_data = None
+                 model_name="mistral:latest",
+                 base_url="http://localhost:11434",
+                 temperature=0.1):
+        """Initialize the Transcript Insights agent with direct parameters."""
+        self.model_name = model_name
+        self.base_url = base_url
+        self.temperature = temperature
+        self.num_ctx = 4096
     
     async def _prepare_prompt(self, video_data: YouTubeVideoData) -> str:
         """Prepare a prompt for extracting insights from transcript data."""
         # Combine transcript segments into a single text for analysis
         transcript_text = " ".join([segment.text for segment in video_data.transcript])
         
-        prompt = f"""
-        You are an expert analyzer of video content. Extract key insights from this YouTube video transcript.
-
-        VIDEO TITLE: {video_data.title}
+        return f"""
+        Analyze this YouTube video transcript and extract key insights.
+        TITLE: {video_data.title}
         CHANNEL: {video_data.channel}
-        DESCRIPTION: {video_data.description}
+        TRANSCRIPT: {transcript_text[:3000]}...
 
-        TRANSCRIPT:
-        {transcript_text}
-
-        Based on this transcript, provide the following in JSON format:
-        1. A concise summary (3-5 sentences)
-        2. Software tools/libraries mentioned
-        3. 5 main topics discussed
-        4. 7 key points from the content
-
-        Format your response as valid JSON only:
-        ```json
-        {{
-          "summary": "...",
-          "software_mentions": [
-            {{
-              "name": "...",
-              "description": "..."
-            }}
-          ],
-          "main_topics": ["..."],
-          "key_points": ["..."]
-        }}
-        ```
+        Provide a JSON with: summary (3-5 sentences), software_mentions (list of tools mentioned),
+        main_topics (5 topics), and key_points (7 points).
         """
-        return prompt
     
-    async def _get_model_response(self, prompt: str) -> str:
-        """Send a prompt to the Ollama model and get a response."""
+    async def _call_ollama(self, prompt: str) -> Dict[str, Any]:
+        """Direct API call to Ollama without inheritance."""
         try:
-            # Use the /api/generate endpoint that was confirmed to work
             url = f"{self.base_url}/api/generate"
             
             payload = {
                 "model": self.model_name,
                 "prompt": prompt,
-                "stream": False,  # Get the full response at once
-                "temperature": self.temperature,
-                "num_ctx": self.num_ctx
+                "stream": False,
+                "options": {
+                    "temperature": self.temperature,
+                    "num_ctx": self.num_ctx
+                }
             }
+            
+            logger.info(f"Making API request to: {url}")
+            logger.info(f"Using model: {self.model_name}")
             
             async with httpx.AsyncClient() as client:
                 response = await client.post(url, json=payload, timeout=60.0)
-                response.raise_for_status()
-                result = response.json()
-                return result.get("response", "")
                 
+                # Log response code
+                logger.info(f"Response status: {response.status_code}")
+                
+                if response.status_code != 200:
+                    logger.error(f"API error: {response.text}")
+                    return {"response": f"Error {response.status_code}: {response.text}"}
+                
+                return response.json()
         except Exception as e:
-            logger.error(f"Error getting model response: {e}")
-            return f"Error: {str(e)}"
+            logger.error(f"Error calling Ollama API: {e}")
+            return {"response": f"Error: {str(e)}"}
     
     async def run(self, video_data: YouTubeVideoData) -> VideoAnalysisData:
         """Run the agent to extract insights from video transcript."""
         try:
-            self.input_data = video_data
-            
             if not video_data.transcript:
                 logger.warning(f"No transcript available for video: {video_data.video_id}")
                 return VideoAnalysisData(original_data=video_data)
             
+            # Prepare prompt 
             prompt = await self._prepare_prompt(video_data)
+            logger.info(f"Calling Ollama API for video: {video_data.video_id}")
             
-            logger.info(f"Running analysis for video: {video_data.video_id}")
-            response = await self._get_model_response(prompt)
+            # Call API directly with explicit parameters
+            result = await self._call_ollama(prompt)
             
+            # Extract response text
+            response_text = result.get("response", "")
+            
+            # Parse JSON from response
             try:
-                insights_data = self._parse_json_response(response)
+                insights_data = self._parse_json_response(response_text)
                 
-                result = VideoAnalysisData(
+                return VideoAnalysisData(
                     original_data=video_data,
                     summary=insights_data.get("summary", ""),
                     main_topics=insights_data.get("main_topics", []),
@@ -125,46 +106,29 @@ class TranscriptInsightsAgent(BaseAgent[VideoAnalysisData]):
                         for item in insights_data.get("software_mentions", [])
                     ]
                 )
-                
-                return result
-                
-            except Exception as parsing_error:
-                logger.error(f"Error parsing response: {parsing_error}")
-                return await self.fallback_parsing(response)
+            except Exception as e:
+                logger.error(f"Error parsing response: {e}")
+                return VideoAnalysisData(original_data=video_data)
             
         except Exception as e:
-            logger.error(f"Error processing transcript data: {e}")
+            logger.error(f"Error in transcript analysis: {e}")
             return VideoAnalysisData(original_data=video_data)
     
     def _parse_json_response(self, response: str) -> Dict[str, Any]:
         """Extract JSON from model response."""
-        json_match = re.search(r'```json\s*([\s\S]*?)\s*```', response) or re.search(r'({[\s\S]*})', response)
-        
-        if json_match:
-            json_str = json_match.group(1)
-            return json.loads(json_str)
-        else:
+        try:
+            # Try direct JSON parsing first
             return json.loads(response)
-    
-    async def fallback_parsing(self, raw_text: str) -> VideoAnalysisData:
-        """Fallback parsing method if structured output fails."""
-        logger.info("Using fallback parsing for response")
-        
-        summary_match = re.search(r'"summary"\s*:\s*"([^"]+)"', raw_text)
-        summary = summary_match.group(1) if summary_match else "Summary extraction failed"
-        
-        software_mentions = []
-        software_match = re.findall(r'"name"\s*:\s*"([^"]+)"', raw_text)
-        for name in software_match:
-            software_mentions.append(SoftwareMention(
-                name=name,
-                description="Extracted via fallback parsing"
-            ))
-        
-        return VideoAnalysisData(
-            original_data=self.input_data,
-            summary=summary,
-            software_mentions=software_mentions,
-            main_topics=[],
-            key_points=[]
-        )
+        except json.JSONDecodeError:
+            # Fall back to regex pattern matching
+            json_match = re.search(r'```json\s*([\s\S]*?)\s*```', response) or re.search(r'({[\s\S]*})', response)
+            if json_match:
+                return json.loads(json_match.group(1))
+            else:
+                # Return empty structure if parsing fails
+                return {
+                    "summary": "Failed to parse response",
+                    "software_mentions": [],
+                    "main_topics": [],
+                    "key_points": []
+                }

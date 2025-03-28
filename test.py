@@ -14,6 +14,7 @@ async def test_ollama_as_agent():
     # Use the same model and URL as your agent
     model_name = "mistral:latest"  # Same default as your agent
     base_url = "http://localhost:11434"
+    
     temperature = 0.1
     num_ctx = 4096
     
